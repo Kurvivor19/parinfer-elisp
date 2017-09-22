@@ -225,7 +225,8 @@
 
     ;; reset line-specific state
     (puthash :commentX nil result)
-    (puthash :indentDelta 0 result)))
+    (puthash :indentDelta 0 result)
+    (puthash :firstUnmatchedCloseParenX nil result)))
 
 ;; if the current character has changed, commit it's change to the current line
 (defun parinferlib--commit-char (result orig-ch)
@@ -284,8 +285,16 @@
     (puthash :parenStack paren-stack result)))
 
 (defun parinferlib--on-unmatched-close-paren (result)
-  (unless (gethash :firstUnmatchedCloseParenX result)
-    (puthash :firstUnmatchedCloseParenX (1+ (gethash :x result)) result)))
+  (let ((x (gethash :x result)))
+    (cond
+     ((equal (gethash :mode result) :paren)
+      (throw 'parinferlib-error (parinferlib--create-error result
+                                                         parinferlib--ERR_UNMATCHED_CLOSE_PAREN
+                                                         (gethash :lineNo result)
+                                                         x)))
+     ((not (gethash :firstUnmatchedCloseParenX result))
+      (puthash :firstUnmatchedCloseParenX x result)
+      (puthash :parenTrailEndX (1+ x) result)))))
 
 (defun parinferlib--on-close-paren (result)
   (when (gethash :isInCode result)
@@ -316,7 +325,7 @@
            (when (gethash :quoteDanger result)
              (let ((line-no (gethash :lineNo result))
                    (x (gethash :x result)))
-               (parinferlib--cache-error-pos result parinferlib--ERR_QUOTE_DANGER line-no x)))))
+               (parinferlib--cache-error-pos result parinferlib--ERR_UNM line-no x)))))
 
         (t
          (let ((line-no (gethash :lineNo result))
@@ -337,8 +346,9 @@
     (parinferlib--on-newline result)))
 
 (defun parinferlib--on-char (result)
-  (let ((ch (gethash :ch result)))
-    (cond ((gethash :isEscaping result)   (parinferlib--after-backslash result))
+  (let ((ch (gethash :ch result))
+        (is-escaping? (gethash :isEscaping result)))
+    (cond (is-escaping? (parinferlib--after-backslash result))
           ((parinferlib--open-paren? ch)  (parinferlib--on-open-paren result))
           ((parinferlib--close-paren? ch) (parinferlib--on-close-paren result))
           ((string= ch parinferlib--DOUBLE_QUOTE) (parinferlib--on-quote result))
@@ -346,9 +356,21 @@
           ((string= ch parinferlib--BACKSLASH)    (parinferlib--on-backslash result))
           ((string= ch parinferlib--TAB)          (parinferlib--on-tab result))
           ((string= ch parinferlib--NEWLINE)      (parinferlib--on-newline result))))
-  (let ((in-comment? (gethash :isInComment result))
-        (in-string? (gethash :isInStr result)))
-    (puthash :isInCode (and (not in-comment?) (not in-string?)) result)))
+  (let* ((in-comment? (gethash :isInComment result))
+         (in-string? (gethash :isInStr result))
+         (in-code? (and (not in-comment?) (not in-string?)))
+         (ch (gethash :ch result))
+         (is-blank? (member ch '(""
+                                 parinferlib--BLANK_SPACE
+                                 parinferlib--DOUBLE_SPACE)))
+         (is-trailable? (not (or is-blank?
+                                 (parinferlib--close-paren? ch)))))
+    (puthash :isInCode in-code? result)
+    (when (and in-code? (or is-escaping? is-trailable?))
+      (parinferlib--reset-paren-trail result
+                                      (gethash :lineNo result)
+                                      (+ (length ch)
+                                         (gethash :x result))))))
 
 ;;------------------------------------------------------------------------------
 ;; Cursor functions
@@ -591,12 +613,15 @@
   (when (equal :paren (gethash :mode result))
     (let* ((paren-stack (gethash :parenStack result))
            (ch (gethash :ch result)))
-      (when (parinferlib--valid-close-paren? paren-stack ch)
+      (if (parinferlib--valid-close-paren? paren-stack ch)
         (if (parinferlib--cursor-on-left? result)
           (progn (puthash :skipChar nil result)
                  (parinferlib--on-indent result))
-          (parinferlib--append-paren-trail result))))))
-
+          (parinferlib--append-paren-trail result))
+        (throw 'parinferlib-error (parinferlib--create-error result
+                                                             parinferlib--ERR_UNMATCHED_CLOSE_PAREN
+                                                           (gethash :lineNo result)
+                                                           (gethash :x result)))))))
 (defun parinferlib--check-indent (result)
   (let ((ch (gethash :ch result))
         (result-x (gethash :x result))
@@ -694,7 +719,7 @@
   (let ((unmatched-x (gethash ::firstUnmatchedCloseParenX result)))
     (when (and unmatched-x (< unmatched-x (gethash :parenTrailStartX result)))
       (throw 'parinferlib-error (parinferlib--create-error result
-                                                           parinferlib--ERR_UNCLOSED_PAREN
+                                                           parinferlib--ERR_UNMATCHED_CLOSE_PAREN
                                                            (gethash :lineNo result)
                                                            unmatched-x))))    
   (when (equal (gethash :lineNo result)

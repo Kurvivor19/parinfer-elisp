@@ -108,6 +108,7 @@
 
     (puthash :maxIndent nil result)
     (puthash :indentDelta 0 result)
+    (puthash :firstUnmatchedCloseParenX nil result)
 
     (puthash :error nil result)
 
@@ -279,7 +280,8 @@
     (puthash :parenStack paren-stack result)))
 
 (defun parinferlib--on-unmatched-close-paren (result)
-  (puthash :ch "" result))
+  (unless (gethash :firstUnmatchedCloseParenX result)
+    (puthash :firstUnmatchedCloseParenX (1+ (gethash :x result)) result)))
 
 (defun parinferlib--on-close-paren (result)
   (when (gethash :isInCode result)
@@ -685,6 +687,12 @@
       (parinferlib--process-char result (string (aref chars i)))
       (setq i (1+ i))))
 
+  (let ((unmatched-x (gethash ::firstUnmatchedCloseParenX result)))
+    (when (and unmatched-x (< unmatched-x (gethash :parenTrailStartX result)))
+      (throw 'parinferlib-error (parinferlib--create-error result
+                                                           parinferlib--ERR_UNCLOSED_PAREN
+                                                           (gethash :lineNo result)
+                                                           unmatched-x))))    
   (when (equal (gethash :lineNo result)
                (gethash :parenTrailLineNo result))
     (parinferlib--finish-new-paren-trail result)))

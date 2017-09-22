@@ -136,12 +136,16 @@
 (defconst parinferlib--ERR_EOL_BACKSLASH "eol-backslash")
 (defconst parinferlib--ERR_UNCLOSED_QUOTE "unclosed-quote")
 (defconst parinferlib--ERR_UNCLOSED_PAREN "unclosed-paren")
+(defconst parinferlib--ERR_UNMATCHED_CLOSE_PAREN "unmatched-close-parent")
+(defconst parinferlib--ERR_UNHANDLED "unhandled")
 
 (defconst parinferlib--ERR_MESSAGES (make-hash-table :test 'equal))
 (puthash parinferlib--ERR_QUOTE_DANGER   "Quotes must balanced inside comment blocks." parinferlib--ERR_MESSAGES)
 (puthash parinferlib--ERR_EOL_BACKSLASH  "Line cannot end in a hanging backslash." parinferlib--ERR_MESSAGES)
 (puthash parinferlib--ERR_UNCLOSED_QUOTE "String is missing a closing quote." parinferlib--ERR_MESSAGES)
 (puthash parinferlib--ERR_UNCLOSED_PAREN "Unmatched open-paren." parinferlib--ERR_MESSAGES)
+(puthash parinferlib--ERR_UNMATCHED_CLOSE_PAREN "Unmatched close-paren." parinferlib--ERR_MESSAGES)
+(puthash parinferlib--ERR_UNHANDLED "Unhandled error." parinferlib--ERR_MESSAGES)
 
 (defun parinferlib--cache-error-pos (result error-name line-no x)
   (let* ((error-cache (gethash :errorPosCache result))

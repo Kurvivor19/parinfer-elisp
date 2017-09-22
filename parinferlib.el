@@ -360,6 +360,7 @@
          (in-string? (gethash :isInStr result))
          (in-code? (and (not in-comment?) (not in-string?)))
          (ch (gethash :ch result))
+         (is-escaping? (gethash :isEscaping result))
          (is-blank? (member ch '(""
                                  parinferlib--BLANK_SPACE
                                  parinferlib--DOUBLE_SPACE)))

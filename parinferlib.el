@@ -325,7 +325,7 @@
            (when (gethash :quoteDanger result)
              (let ((line-no (gethash :lineNo result))
                    (x (gethash :x result)))
-               (parinferlib--cache-error-pos result parinferlib--ERR_UNM line-no x)))))
+               (parinferlib--cache-error-pos result parinferlib--ERR_UNMATCHED_CLOSE_PAREN line-no x)))))
 
         (t
          (let ((line-no (gethash :lineNo result))
@@ -361,9 +361,9 @@
          (in-code? (and (not in-comment?) (not in-string?)))
          (ch (gethash :ch result))
          (is-escaping? (gethash :isEscaping result))
-         (is-blank? (member ch '(""
-                                 parinferlib--BLANK_SPACE
-                                 parinferlib--DOUBLE_SPACE)))
+         (is-blank? (member ch (list ""
+                                     parinferlib--BLANK_SPACE
+                                     parinferlib--DOUBLE_SPACE)))
          (is-trailable? (not (or is-blank?
                                  (parinferlib--close-paren? ch)))))
     (puthash :isInCode in-code? result)
@@ -554,8 +554,6 @@
        (progn
          (parinferlib--clamp-paren-trail-to-cursor result)
          (parinferlib--pop-paren-trail result)))
-
-
       ((and (equal mode :paren)
             (not (equal line-no cursor-line)))
        (parinferlib--clean-paren-trail result)))))

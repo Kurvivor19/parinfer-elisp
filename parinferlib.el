@@ -12,6 +12,8 @@
 ;; NOTE: everything is namespaced under `parinferlib` with the assumption that
 ;;       Emacs extensions might use `parinfer`
 
+(require 'cl)
+(require 'dash)
 ;;------------------------------------------------------------------------------
 ;; Constants / Predicates
 ;;------------------------------------------------------------------------------
@@ -111,8 +113,6 @@
 
     (puthash :maxIndent nil result)
     (puthash :indentDelta 0 result)
-    (puthash :firstUnmatchedCloseParenX nil result)
-    (puthash :firstUnmatchedCloseParenInputX nil result)
 
     (puthash :error nil result)
 
@@ -153,9 +153,19 @@
 (puthash parinferlib--ERR_UNMATCHED_OPEN_PAREN "Unmatched open-paren." parinferlib--ERR_MESSAGES)
 (puthash parinferlib--ERR_UNHANDLED "Unhandled error." parinferlib--ERR_MESSAGES)
 
-(defun parinferlib--cache-error-pos (result error-name line-no x)
+(defun parinferlib--cache-error-pos (result error-name)
   (let* ((error-cache (gethash :errorPosCache result))
-         (position (list :line-no line-no :x x))
+         (position (list :line-no (gethash :lineNo result)
+                         :x (gethash :x result)
+                         :inputX (gethash :inputX result)))
+         (updated-error-cache (plist-put error-cache error-name position)))
+    (puthash :errorPosCache updated-error-cache result)))
+
+(defun parinferlib--cache-error-pos-detail (result error-name line-no input-x)
+  (let* ((error-cache (gethash :errorPosCache result))
+         (position (list :line-no line-no
+                         :x (gethash :x result)
+                         :inputX input-x))
          (updated-error-cache (plist-put error-cache error-name position)))
     (puthash :errorPosCache updated-error-cache result)))
 
@@ -167,20 +177,20 @@
          (error-cache (gethash :errorPosCache result))
          (error-msg (gethash error-name parinferlib--ERR_MESSAGES))
          (error-position (plist-get error-cache error-name)))
+    (when error-position
+      (setq line-no (plist-get error-position :line-no))
+      (setq x (plist-get error-position :inputX)))
     (cond
      ((equal error-name parinferlib--ERR_UNMATCHED_CLOSE_PAREN)
-      (when (gethash :firstUnmatchedCloseParenInputX result)
-        (setq x (gethash :firstUnmatchedCloseParenInputX result)))
-      (when opener
+      (when (or openererror-position)
         (setq extra (list :name parinferlib--ERR_UNMATCHED_OPEN_PAREN
-                          :line-no (aref opener parinferlib--LINE_NO_IDX)
-                          :x (aref opener parinferlib--INPUT_X_IDX)))))
+                          :line-no (or (plist-get error-position :line-no)
+                                       (aref opener parinferlib--LINE_NO_IDX))
+                          :x (or (plist-get error-position :inputX)
+                                 (aref opener parinferlib--INPUT_X_IDX))))))
      ((equal error-name parinferlib--ERR_UNCLOSED_PAREN)
       (setq line-no (aref opener parinferlib--LINE_NO_IDX))
-      (setq x (aref opener parinferlib--INPUT_X_IDX)))
-     (error-position
-      (setq line-no (plist-get error-position :line-no))
-      (setq x (plist-get error-position :x))))
+      (setq x (aref opener parinferlib--INPUT_X_IDX))))
     ;; return a plist of the error
     (list :name error-name
           :message error-msg
@@ -246,8 +256,12 @@
     ;; reset line-specific state
     (puthash :commentX nil result)
     (puthash :indentDelta 0 result)
-    (puthash :firstUnmatchedCloseParenX nil result)
-    (puthash :firstUnmatchedCloseParenInputX nil result)))
+    (puthash :errorPosCache
+             (--> (gethash :errorPosCache result)
+                  (plist-put it
+                             parinferlib--ERR_UNMATCHED_CLOSE_PAREN nil)
+                  (plist-put it
+                             parinferlib--ERR_UNMATCHED_OPEN_PAREN nil)))))
 
 ;; if the current character has changed, commit it's change to the current line
 (defun parinferlib--commit-char (result orig-ch)
@@ -307,15 +321,25 @@
     (puthash :parenStack paren-stack result)))
 
 (defun parinferlib--on-unmatched-close-paren (result)
-  (let ((x (gethash :x result)))
+  (let ((x (gethash :x result))
+        (error-cache (gethash :errorPosCache result)))
     (cond
      ((equal (gethash :mode result) :paren)
       (throw 'parinferlib-error (parinferlib--create-error result
                                                          parinferlib--ERR_UNMATCHED_CLOSE_PAREN)))
-     ((not (gethash :firstUnmatchedCloseParenX result))
-      (puthash :firstUnmatchedCloseParenX x result)
-      (puthash :firstUnmatchedCloseParenInputX (gethash :inputX result) result)
-      (puthash :parenTrailEndX (1+ x) result)))))
+     ((not (plist-get error-cache parinferlib--ERR_UNMATCHED_CLOSE_PAREN))
+      (let* ((paren-stack (gethash :parenStack result))
+             (opener (car paren-stack)))
+        (if opener
+            (let* ((opener-x (aref opener parinferlib--X_IDX))
+                   (opener-input-x (aref opener parinferlib--INPUT_X_IDX))
+                   (opener-line-no (aref opener parinferlib--LINE_NO_IDX)))
+              (parinferlib--cache-error-pos-detail result
+                                                   parinferlib--ERR_UNMATCHED_CLOSE_PAREN
+                                                   opener-line-no
+                                                   opener-input-x))
+          (parinferlib--cache-error-pos result parinferlib--ERR_UNMATCHED_CLOSE_PAREN)))))
+    (puthash :parenTrailEndX (1+ x) result)))
 
 (defun parinferlib--on-close-paren (result)
   (when (gethash :isInCode result)
@@ -346,13 +370,13 @@
            (when (gethash :quoteDanger result)
              (let ((line-no (gethash :lineNo result))
                    (x (gethash :x result)))
-               (parinferlib--cache-error-pos result parinferlib--ERR_UNMATCHED_CLOSE_PAREN line-no x)))))
+               (parinferlib--cache-error-pos result parinferlib--ERR_UNMATCHED_CLOSE_PAREN)))))
 
         (t
          (let ((line-no (gethash :lineNo result))
                (x (gethash :x result)))
            (puthash :isInStr t result)
-           (parinferlib--cache-error-pos result parinferlib--ERR_UNCLOSED_QUOTE line-no x)))))
+           (parinferlib--cache-error-pos result parinferlib--ERR_UNCLOSED_QUOTE)))))
 
 (defun parinferlib--on-backslash (result)
   (puthash :isEscaping t result))
@@ -562,6 +586,15 @@
   (puthash :parenTrailEndX nil result)
   (puthash :parenTrailOpeners '() result))
 
+(defun parinferlib--check-unmatched-outside-paren-trail (result)
+  (let* ((cache (gethash :errorPosCache result))
+         (error-position (plist-get cache parinferlib--ERR_UNMATCHED_CLOSE_PAREN))
+         (parenTrailX (gethash :parenTrailStartX result)))
+    (when error-position
+      (when (< (plist-get error-position :x) parenTrailX)
+        (throw 'parinferlib-error (parinferlib--create-error result
+                                                             parinferlib--ERR_UNMATCHED_CLOSE_PAREN))))))
+
 (defun parinferlib--finish-new-paren-trail (result)
   (let* ((in-str? (gethash :isInStr result))
          (mode (gethash :mode result))
@@ -736,12 +769,7 @@
       (parinferlib--process-char result (string (aref chars i)))
       (setq i (1+ i))))
 
-  (let ((unmatched-x (gethash ::firstUnmatchedCloseParenX result)))
-    (when (and unmatched-x (< unmatched-x (gethash :parenTrailStartX result)))
-      (let ((var-error (parinferlib--create-error result
-                                              parinferlib--ERR_UNMATCHED_CLOSE_PAREN)))
-        (plist-set var-error :x (gethash :firstUnmatchedCloseParenInputX result))
-        (throw 'parinferlib-error var-error))))
+  (parinferlib--check-unmatched-outside-paren-trail result)
   (when (equal (gethash :lineNo result)
                (gethash :parenTrailLineNo result))
     (parinferlib--finish-new-paren-trail result)))

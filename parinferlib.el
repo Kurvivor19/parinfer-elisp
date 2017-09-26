@@ -1,5 +1,5 @@
 ;;; parinferlib.el --- a Parinfer implementation in Emacs Lisp
-;; v2.2.0
+;; v2.2.1
 ;; https://github.com/oakmac/parinfer-elisp
 ;;
 ;; More information about Parinfer can be found here:
@@ -340,7 +340,7 @@
                                                    opener-line-no
                                                    opener-input-x))
           (parinferlib--cache-error-pos result parinferlib--ERR_UNMATCHED_CLOSE_PAREN)))))
-    (puthash :parenTrailEndX (1+ x) result)))
+    (puthash :ch "" result)))
 
 (defun parinferlib--on-close-paren (result)
   (when (gethash :isInCode result)

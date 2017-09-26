@@ -84,7 +84,7 @@
     (puthash :lineNo -1 result)
     (puthash :ch "" result)
     (puthash :x 0 result)
-    (puthash :inputX result)
+    (puthash :inputX -1 result)
 
     (puthash :parenStack '() result)
     (puthash :tabStops '() result)
@@ -182,7 +182,7 @@
       (setq x (plist-get error-position :inputX)))
     (cond
      ((equal error-name parinferlib--ERR_UNMATCHED_CLOSE_PAREN)
-      (when (or openererror-position)
+      (when (or opener error-position)
         (setq extra (list :name parinferlib--ERR_UNMATCHED_OPEN_PAREN
                           :line-no (or (plist-get error-position :line-no)
                                        (aref opener parinferlib--LINE_NO_IDX))
@@ -261,7 +261,8 @@
                   (plist-put it
                              parinferlib--ERR_UNMATCHED_CLOSE_PAREN nil)
                   (plist-put it
-                             parinferlib--ERR_UNMATCHED_OPEN_PAREN nil)))))
+                             parinferlib--ERR_UNMATCHED_OPEN_PAREN nil))
+             result)))
 
 ;; if the current character has changed, commit it's change to the current line
 (defun parinferlib--commit-char (result orig-ch)

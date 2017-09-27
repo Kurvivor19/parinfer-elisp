@@ -1,5 +1,5 @@
 ;;; parinferlib.el --- a Parinfer implementation in Emacs Lisp
-;; v2.2.1
+;; v2.3.1
 ;; https://github.com/oakmac/parinfer-elisp
 ;;
 ;; More information about Parinfer can be found here:
@@ -34,11 +34,13 @@
 ;;   2 : lineNo
 ;;   3 : x
 ;;   4 : inputX
+;;   5 : inputLineNo
 (defconst parinferlib--CH_IDX 0)
 (defconst parinferlib--INDENT_DELTA_IDX 1)
 (defconst parinferlib--LINE_NO_IDX 2)
 (defconst parinferlib--X_IDX 3)
 (defconst parinferlib--INPUT_X_IDX 4)
+(defconst parinferlib--INPUT_LINE_NO_IDX 5)
 
 ;; determines if a line only contains a Paren Trail (possibly w/ a comment)
 (defconst parinferlib--STANDALONE_PAREN_TRAIL "^[][:space:])}]*\\(;.*\\)?$")
@@ -79,9 +81,11 @@
     (puthash :origText text result)
     (puthash :origLines lines-vector result)
     (puthash :origCursorX nil result)
+    (puthash :origCursorLine nil result)
 
     (puthash :lines (make-vector (length lines-vector) nil) result)
     (puthash :lineNo -1 result)
+    (puthash :inputLineNo -1 result)
     (puthash :ch "" result)
     (puthash :x 0 result)
     (puthash :inputX -1 result)
@@ -110,6 +114,7 @@
     (puthash :trackingIndent nil result)
     (puthash :skipChar nil result)
     (puthash :success nil result)
+    (puthash :partialResult nil result)
 
     (puthash :maxIndent nil result)
     (puthash :indentDelta 0 result)
@@ -129,7 +134,8 @@
       (puthash :cursorDx (plist-get options :cursor-dx) result))
     (when (booleanp (plist-get options :preview-cursor-scope))
       (puthash :previewCursorScope (plist-get options :preview-cursor-scope) result))
-
+    (when (booleanp (plist-get options :partial-result))
+      (puthash :partialResult (plist-get options :partial-result) result))
     result))
 
 ;;------------------------------------------------------------------------------
@@ -155,16 +161,18 @@
 
 (defun parinferlib--cache-error-pos (result error-name)
   (let* ((error-cache (gethash :errorPosCache result))
-         (position (list :line-no (gethash :lineNo result)
+         (position (list :lineNo (gethash :lineNo result)
+                         :inputLineNo (gethash :inputLineNo result)
                          :x (gethash :x result)
                          :inputX (gethash :inputX result)))
          (updated-error-cache (plist-put error-cache error-name position)))
     (puthash :errorPosCache updated-error-cache result)))
 
-(defun parinferlib--cache-error-pos-detail (result error-name line-no input-x)
+(defun parinferlib--cache-error-pos-detail (result error-name input-line-no input-x)
   (let* ((error-cache (gethash :errorPosCache result))
-         (position (list :line-no line-no
+         (position (list :lineNo (gethash :lineNo result)
                          :x (gethash :x result)
+                         :inputLineNo input-line-no
                          :inputX input-x))
          (updated-error-cache (plist-put error-cache error-name position)))
     (puthash :errorPosCache updated-error-cache result)))
@@ -176,21 +184,26 @@
          (opener (car (gethash :parenStack result)))
          (error-cache (gethash :errorPosCache result))
          (error-msg (gethash error-name parinferlib--ERR_MESSAGES))
-         (error-position (plist-get error-cache error-name)))
+         (error-position (plist-get error-cache error-name))
+         (partial-result (gethash :partialResult result))
+         (key-line-no-sym (if partial-result :inputLineNo :lineNo))
+         (key-line-no-idx (if partial-result parinferlib--INPUT_LINE_NO_IDX parinferlib--LINE_NO_IDX))
+         (key-x-sym (if partial-result :inputX :x))
+         (key-x-idx (if partial-result parinferlib--INPUT_X_IDX parinferlib--X_IDX)))
     (when error-position
-      (setq line-no (plist-get error-position :line-no))
-      (setq x (plist-get error-position :inputX)))
+      (setq line-no (plist-get error-position key-line-no-sym))
+      (setq x (plist-get error-position key-x-sym)))
     (cond
      ((equal error-name parinferlib--ERR_UNMATCHED_CLOSE_PAREN)
       (when (or opener error-position)
         (setq extra (list :name parinferlib--ERR_UNMATCHED_OPEN_PAREN
-                          :line-no (or (plist-get error-position :line-no)
-                                       (aref opener parinferlib--LINE_NO_IDX))
-                          :x (or (plist-get error-position :inputX)
-                                 (aref opener parinferlib--INPUT_X_IDX))))))
+                          :line-no (or (plist-get error-position key-line-no-sym)
+                                       (aref opener key-line-no-idx))
+                          :x (or (plist-get error-position key-x-sym)
+                                 (aref opener key-x-idx))))))
      ((equal error-name parinferlib--ERR_UNCLOSED_PAREN)
-      (setq line-no (aref opener parinferlib--LINE_NO_IDX))
-      (setq x (aref opener parinferlib--INPUT_X_IDX))))
+      (setq line-no (aref opener key-line-no-idx))
+      (setq x (aref opener key-x-idx))))
     ;; return a plist of the error
     (list :name error-name
           :message error-msg
@@ -303,7 +316,8 @@
                                  (gethash :indentDelta result)
                                  (gethash :lineNo result)
                                  (gethash :x result)
-                                 (gethash :inputX result)))
+                                 (gethash :inputX result)
+                                 (gethash :inputLinNo result)))
            (paren-stack (gethash :parenStack result))
            (new-paren-stack (cons new-stack-el paren-stack)))
       (puthash :parenStack new-paren-stack result))))
@@ -808,6 +822,7 @@
          (i 0)
          (err (catch 'parinferlib-error
                 (while (< i lines-length)
+                  (puthash :inputLineNo i result)
                   (parinferlib--process-line result (aref orig-lines i))
                   (setq i (1+ i)))
                 (parinferlib--finalize-result result)

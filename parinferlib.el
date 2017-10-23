@@ -1,5 +1,5 @@
 ;;; parinferlib.el --- a Parinfer implementation in Emacs Lisp
-;; v2.3.1
+;; v2.4.0
 ;; https://github.com/oakmac/parinfer-elisp
 ;;
 ;; More information about Parinfer can be found here:
@@ -546,8 +546,9 @@
                 (not break?))
       (let* ((opener (car paren-stack))
              (opener-x (aref opener parinferlib--X_IDX))
-             (opener-ch (aref opener parinferlib--CH_IDX)))
-        (if (>= opener-x indent-x)
+             (opener-ch (aref opener parinferlib--CH_IDX))
+             (opener-indent-delta (aref opener parinferlib--INDENT_DELTA_IDX)))
+        (if (>= (- opener-x opener-indent-delta) indent-x)
           (progn (pop paren-stack)
                  (setq parens (concat parens (gethash opener-ch parinferlib--PARENS))))
           (setq break? t))))
@@ -631,6 +632,21 @@
 ;; Indentation functions
 ;;------------------------------------------------------------------------------
 
+(defun parinferlib--change-indent (result delta)
+  (let* ((orig-indent (gethash :x result))
+         (new-indent (+ orig-indent delta))
+         (indent-str (apply 'concat (make-list new-indent parinferlib--BLANK_SPACE))))
+    (parinferlib--replace-within-line result
+                                      (gethash :lineNo result)
+                                      0
+                                      orig-indent
+                                      indent-str)
+    (puthash :x new-indent result)
+    (puthash :indentDelta
+             (+ delta
+                (gethash :indentDelta result))
+             result)))
+
 (defun parinferlib--correct-indent (result)
   (let* ((orig-indent (gethash :x result))
          (new-indent orig-indent)
@@ -644,14 +660,8 @@
         (setq min-indent (1+ opener-x))
         (setq new-indent (+ new-indent opener-indent-delta))))
     (setq new-indent (parinferlib--clamp new-indent min-indent max-indent))
-    (when (not (equal new-indent orig-indent))
-      (let* ((indent-str (make-string new-indent (aref parinferlib--BLANK_SPACE 0)))
-             (line-no (gethash :lineNo result))
-             (indent-delta (gethash :indentDelta result))
-             (new-indent-delta (+ indent-delta (- new-indent orig-indent))))
-        (parinferlib--replace-within-line result line-no 0 orig-indent indent-str)
-        (puthash :x new-indent result)
-        (puthash :indentDelta new-indent-delta result)))))
+    (unless (equal new-indent orig-indent)
+      (parinferlib--change-indent resilt (- new-indent orig-indent)))))
 
 (defun parinferlib--try-preview-cursor-scope (result)
   (when (gethash :canPreviewCursorScope result)
@@ -670,8 +680,14 @@
   (let ((mode (gethash :mode result))
         (x (gethash :x result)))
     (when (equal mode :indent)
-      (parinferlib--try-preview-cursor-scope result)
-      (parinferlib--correct-paren-trail result x))
+      ; (parinferlib--try-preview-cursor-scope result)
+      (parinferlib--correct-paren-trail result x)
+      (let* ((paren-stack (gethash :parenStack result))
+             (opener (car paren-stack))
+             (delta (and opener
+                         (aref opener parinferlib--INDENT_DELTA_IDX))))
+        (when delta
+          (parinferlib--change-indent result delta)))
     (when (equal mode :paren)
       (parinferlib--correct-indent result))))
 
@@ -759,8 +775,7 @@
     (puthash :ch ch result)
     (puthash :skipChar nil result)
 
-    (when (equal :paren mode)
-      (parinferlib--handle-cursor-delta result))
+    (parinferlib--handle-cursor-delta result)
 
     (when (gethash :trackingIndent result)
       (parinferlib--check-indent result))

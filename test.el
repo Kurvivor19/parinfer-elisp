@@ -36,9 +36,9 @@
   (mapconcat 'identity l "\n"))
 
 (defun test-by-line-no (tests line-no)
-  (find line-no indent-mode-tests :key (lambda (test)
-                                         (plist-get (plist-get test :in)
-                                                    :fileLineNo))))
+  (find line-no tests :key (lambda (test)
+                             (plist-get (plist-get test :in)
+                                        :fileLineNo))))
 
 (defun convert-result-error (error)
   "Converts error from the library result into a list."
@@ -95,14 +95,13 @@
   "^[[:blank:]]*[-+]+[-+[:blank:]]*$")
 
 (defconst parinferlib--DIFF_MATCH
-  "^\(\([[:blank:]]*\)\(-*\)\(+*\)\)[[:blank:]]*$")
+  "^\\\(\\\([[:blank:]]*\\\)\\\(-*\\\)\\\(+*\\\)\\\)[[:blank:]]*$")
 
 (defun make-change-struct ()
-  (list '(:line-no) '(:x) '(:old-text) '(:new-text)))
+  (mapcar 'list '(:line-no :x :old-text :new-text)))
 
 (defun make-diff-struct ()
-  (list '(:end-line-char) '(:start-line-char)
-        '(:code-line-no) '(:input-line-no) '(:code)))
+  (mapcar 'list '(:end-line-char :start-line-char :code-line-no :input-line-no :code)))
 
 (defun parse-diff-line (options input-line-no output-line-no line prev-line diff)
   "Test if LINE is a diff line and if so return changed version of PREV-LINE. OPTIONS is updated to preserve cursor data and cullect changes; DIFF is filled if needed"
@@ -120,7 +119,7 @@
              (len (+ old-len new-len))
              (x-end (1- (+ x len)))
              (cursor-x (alist-get :cursor-x options))
-             (change make-change-struct)
+             (change (make-change-struct))
              (end-line-char (when (= (length prev-line) x-end)
                               (aref line x-end))))
         (when (> total (1+ (length prev-line)))
@@ -147,10 +146,9 @@
                       (when (equal end-line-char ?-) "\n"))
               (alist-get :new-text change)
               (concat (substring prev-line new-x (+ new-x new-len))
-                      (when equal end-line-char ?+) "\n")
-              (alist-get :changes options)
-              (push change (alist-get :changes options)))
-        (alist-get :code diff)))))
+                      (when (equal end-line-char ?+) "\n")))
+        (push change (alist-get :changes options)))
+        (alist-get :code diff))))
 
 (defun postprocess-diffs (options output-lines input-line-no output-line-no diff prev-diff)
   "Merge changes, lines and diffs as necessary. OUTPUT-LINES is a stack which top is last processed line. Return number of last output line"
@@ -164,11 +162,11 @@
         (result output-line-no))
     (if (and prev-diffed-line cur-diffed-line)
         (if (> 2 (- cur-diffed-line prev-diffed-line))
-            (throw 'parinferlib-error cur-diffed-line "diff lines must be directly below a code line")))
+            (throw 'parinferlib-error (make-parse-error cur-diffed-line "diff lines must be directly below a code line"))))
           ;; check if there is conflict
     (when (equal prev-last-char ?+)
         (if (equal cur-first-char ?-)
-            (throw 'parinferlib-error cur-diffed-line "diff line starts with '-', which cannot come after '+' which previous diff line ends with")))
+            (throw 'parinferlib-error (make-parse-error cur-diffed-line "diff line starts with '-', which cannot come after '+' which previous diff line ends with"))))
             ;; now chack for merge
     (when (and (equal prev-last-char ?-))
       (if (and cur-diff-line (= 2 (- cur-diff-line pref-diff-line)))

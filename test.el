@@ -35,6 +35,11 @@
 (defun string-join (l)
   (mapconcat 'identity l "\n"))
 
+(defun test-by-line-no (tests line-no)
+  (find line-no indent-mode-tests :key (lambda (test)
+                                         (plist-get (plist-get test :in)
+                                                    :fileLineNo))))
+
 (defun convert-result-error (error)
   "Converts error from the library result into a list."
   (list (plist-get error :name)
@@ -93,11 +98,11 @@
   "^\(\([[:blank:]]*\)\(-*\)\(+*\)\)[[:blank:]]*$")
 
 (defun make-change-struct ()
-  (list (:line-no) (:x) (:old-text) (:new-text)))
+  (list '(:line-no) '(:x) '(:old-text) '(:new-text)))
 
 (defun make-diff-struct ()
-  (list (:end-line-char) (:start-line-char)
-        (:code-line-no) (:input-line-no) (:code)))
+  (list '(:end-line-char) '(:start-line-char)
+        '(:code-line-no) '(:input-line-no) '(:code)))
 
 (defun parse-diff-line (options input-line-no output-line-no line prev-line diff)
   "Test if LINE is a diff line and if so return changed version of PREV-LINE. OPTIONS is updated to preserve cursor data and cullect changes; DIFF is filled if needed"
@@ -204,7 +209,7 @@
   (let* ((line-no (plist-get in :fileLineNo))
          (text (plist-get in :text))
          (in-lines (save-match-data
-                     (split-string parinferlib--LINE_ENDING_REGEX)))
+                     (split-string text parinferlib--LINE_ENDING_REGEX)))
          (options '((:cursor-x) (:cursor-dx) (:cursor-line) (:changes)))
          (out-lines '()))
     (loop for prev-line = nil then cur-line
@@ -215,28 +220,33 @@
           with prev-diff = (make-diff-struct)
           for diff = (make-diff-struct) then (make-diff-struct)
           do
-          ((setq cur-line (parse-cursor-from-line options i j cur-line))
-           (setq out-line (parse-diff-line options i j cur-line prev-line diff))
-           (if out-line
-               (setf (car out-lines out-line))
-             (push cur-line out-lines)
-             (incf j))
-           (setq j (postprocess-diffs options out-lines i j diff prev-diff))
-           (when (or (alist-get :input-line-no diff)
-                     (not (alist-get :input-line-no prev-diff))
-                     (> 1 (- i (alist-get :input-line-no prev-diff))))
-             (setq prev-diff diff)))
+          (progn
+            (setq cur-line (parse-cursor-from-line options i j cur-line))
+            (setq out-line (parse-diff-line options i j cur-line prev-line diff))
+            (if out-line
+                (setf (car out-lines) out-line)
+              (push cur-line out-lines)
+              (incf j))
+            (setq j (postprocess-diffs options out-lines i j diff prev-diff))
+            (when (or (alist-get :input-line-no diff)
+                      (not (alist-get :input-line-no prev-diff))
+                      (> 1 (- i (alist-get :input-line-no prev-diff))))
+              (setq prev-diff diff)))
           finally
           (postprocess-diffs options out-lines (+ i 2) j nil prev-diff))
-    (:options options :lines (reverse out-lines))))
-    
+    (list :options options :lines (reverse out-lines))))
+
+
+(defun prepare-out (out)
+  "Process OUT, extracting allinteresting data from text"
+  nil)
     
 
 (defun prepare-test (test)
   "Process TEST, transforming `text` field into plist with needed data"
   (let ((in (prepare-in (plist-get test :in)))
         (out (prepare-out (plist-get test :out))))
-    (:in in :out out)))
+    (list :in in :out out)))
 
 ;;------------------------------------------------------------------------------
 ;; Load test files
@@ -249,6 +259,11 @@
 
 (defconst paren-mode-tests
   (let ((test-str (get-string-from-file "tests/paren-mode.json"))
+        (json-object-type 'plist))
+    (json-read-from-string test-str)))
+
+(defconst smart-mode-tests
+  (let ((test-str (get-string-from-file "tests/smart-mode.json"))
         (json-object-type 'plist))
     (json-read-from-string test-str)))
 

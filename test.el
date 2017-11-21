@@ -91,6 +91,29 @@
               (alist-get :cursor-line options) output-line-no))
       clean)))
 
+(defconst parinferlib--CURSORDX_MATCH
+  "^\\\([[:blank:]]*\\\)^ cursorDx \\\(-?[0-9]+\\\)")
+
+(defun parse-cursor-dx-line (options input-line-no output-line-no line)
+  "Match line with cursorDx annotation; return t and set OPTIONS if annotation found"
+  (save-match-data
+    (when (string-match parinferlib--CURSORDX_MATCH line)
+      (let ((cursor-x (alist-get :cursor-x options))
+            (cursor-line (alist-get :cursor-line options)))
+        (unless cursor-x
+          (throw 'parinferlib-error (make-parse-error input-line-no
+                                                      "cursor not found before cursorDx line")))
+        (unless (= cursor-line (1- output-line-no))
+          (throw 'parinferlib-error (make-parse-error input-line-no
+                                                      "cursor not precedes cursorDx line")))
+        (unless (= cursor-x (length (match-string 1 line)))
+          (throw 'parinferlib-error (make-parse-error input-line-no
+                                                      "cursor position does not match with cursorDx annotation")))
+        (setf (alist-get :cursor-dx options)
+              (string-to-number (match-string 2 line)))
+        t))))
+            
+
 (defconst parinferlib--LOOSE_DIFF_MATCH
   "^[[:blank:]]*[-+]+[-+[:blank:]]*$")
 
@@ -147,8 +170,8 @@
               (alist-get :new-text change)
               (concat (substring prev-line new-x (+ new-x new-len))
                       (when (equal end-line-char ?+) "\n")))
-        (push change (alist-get :changes options)))
-        (alist-get :code diff))))
+        (push change (alist-get :changes options))
+        (alist-get :code diff)))))
 
 (defun postprocess-diffs (options output-lines input-line-no output-line-no diff prev-diff)
   "Merge changes, lines and diffs as necessary. OUTPUT-LINES is a stack which top is last processed line. Return number of last output line"
@@ -218,7 +241,8 @@
           with prev-diff = (make-diff-struct)
           for diff = (make-diff-struct) then (make-diff-struct)
           do
-          (progn
+          ;; lines with cursordx annotation do not recieve other pocessing
+          (unless (parse-cursor-dx-line options i j line)
             (setq cur-line (parse-cursor-from-line options i j cur-line))
             (setq out-line (parse-diff-line options i j cur-line prev-line diff))
             (if out-line

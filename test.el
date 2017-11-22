@@ -1,3 +1,4 @@
+
 ;; This file is part of the parinfer-elisp project:
 ;; https://github.com/oakmac/parinfer-elisp
 ;;
@@ -68,6 +69,12 @@
                        (plist-get ts :x)))
     tabstops))
 
+(defun is-open-paren? (c)
+  (member c '(?{ ?( ?[))))
+
+(defun is-close-paren? (c)
+  (member c '(?} ?) ?]))))
+
 ;;------------------------------------------------------------------------------
 ;; Parser functions
 ;;------------------------------------------------------------------------------
@@ -92,7 +99,7 @@
       clean)))
 
 (defconst parinferlib--CURSORDX_MATCH
-  "^\\\([[:blank:]]*\\\)^ cursorDx \\\(-?[0-9]+\\\)")
+  "^\\\([[:blank:]]*\\\)\\\^ cursorDx \\\(-?[0-9]+\\\)")
 
 (defun parse-cursor-dx-line (options input-line-no output-line-no line)
   "Match line with cursorDx annotation; return t and set OPTIONS if annotation found"
@@ -259,9 +266,122 @@
     (list :options options :lines (reverse out-lines))))
 
 
+(defconst parinferlib--ERROR_MATCH
+  "^[[:blank:]]*\\\^[[:blank:]]*error: \\\([a-z-]+\\\)[[:blank:]]*$")
+
+(defun make-error-struct ()
+  (mapcar 'list '(:line-no :x :name)))
+
+(defun parse-error-line (result input-line-no output-line-no line)
+  (save-match-data
+    (when (string-match parinferlib--ERROR_MATCH line)
+      (when (alist-get :error result)
+        (throw 'parinferlib-error (make-parse-error input-line-no
+                                                    "only one error can be specified")))
+      (let ((x (search "^" line))
+            (cursor-line (alist-get :cursor-line result))
+            (cursor-x (alist-get :cursor-x result))
+            (-error- (make-error-struct)))
+        (when (and (equal cursor-line output-line-no)
+                   (< cursor-x x))
+          (decf x))
+        (setf (alist-get :name -error-) (match-string 1 line)
+              (alist-get :x -error-) x
+              (alist-get :line-no -error-) output-line-no
+              (alist-get :error result) -error-)
+        t))))
+
+(defconst parinferlib--TAB_STOP_MATCH
+  "^\\\([\\\^>[:blank:]]+\\\)tabStops?[[:blank:]]*$")
+
+(defun parse-tab-stops-line (result input-line-no line prev-lines)
+  (save-match-data
+    (when (string-match parinferlib--TAB_STOP_MATCH line)
+      (when (alist-get :tab-stops result)
+        (throw 'parinferlib-error (make-parse-error input-line-no
+                                                    "only one tabStop line can be specified")))
+      (let ((tab-stops
+             (loop for s = 0 then (1+ ts)
+                   for ts = (search "^" line) then (search "^" line :start2 s)
+                   if (>= ts (length (car prev-lines))) do
+                   (throw 'parinferlib-error input-line-no
+                          "tab stop out of the bounds of previous line")
+                   end
+                   for tsl = (list '(:x) '(:ch) '(:line-no)) then (list '(:x) '(:ch) '(:line-no))
+                   do
+                   (loop for prev-line on prev-lines
+                         if (is-open-paren? (aref (car prev-line) ts)) do
+                         (setf (alist-get :x tsl) ts
+                               (alist-get :ch tsl) (aref (car prev-line) ts)
+                               (alist-get :line-no tsl) (1- (length prev-line)))
+                         return
+                         end
+                         finally
+                         (throw 'parinferlib-error input-line-no
+                                (format "tab stop at %d does not point to open paren" ts)))
+                   collect tsl)))
+        ;; tab stops verification
+        (loop for ts in tab-stops
+              for pc = nil then c
+              for c = (alist-get :ch ts)
+              if (= ?> c) do
+              (if (equal ?> pc)
+                  (throw 'parinferlib-error input-line-no
+                         (format "tab stop at %d cannot come after another \">\"" (alist-get :x ts)))
+                (unless pc
+                  (throw 'parinferlib-error input-line-no
+                         (format tab stop at %d is a dependent on previous tab stop) (alist-get :x ts)))))
+        (push tab-stops (alist-get :tab-stops result))
+        t))))
+
+(defconst parinferlib--PAREN_TRAIL_MATCH
+  "^[[:blank:]]*\\\(\\\^*\\\)[[:blank:]]*parentTrail[[:blank:]]*$")
+
+(defun parse-paren-trail-line (result input-line-no output-line-no line prev-line)
+  (save-match-data
+    (when (string-match parinferlib--PAREN_TRAIL_MATCH line)
+      (when (alist-get :cursor-line result)
+        (throw 'parinferlib-error input-line-no
+               "ParenTrail cannot currently be printed when a cursor is present"))
+      (let ((trail (match-string 1 line))
+            (start-x (match-beginning 1))
+            (end-x (+ start-x (length trail))))
+        (loop for i from start-x to end-x do
+              (unless (is-close-paren? (aref prev-line i))
+                (throw 'parinferlib-error (make-parse-error input-line-no
+                                                            "^ parenTrail must point to close-parens only"))))
+        (setf (alist-get :paren-trail result)
+              (list (cons :line-no output-line-no)
+                    (cons :start-x start-x)
+                    (cons :end-x end-x)))
+        t))))
+
+
 (defun prepare-out (out)
   "Process OUT, extracting allinteresting data from text"
-  nil)
+  (let* ((line-no (plist-get out :fileLineNo))
+         (text (plist-get out :text))
+         (out-lines (save-match-data
+                      (split-string text parinferlib--LINE_ENDING_REGEX)))
+         (result '((:cursor-x) (:cursor-line) (:paren-trail) (:error) (:tab-stops)))
+         (out-lines '()))
+    (loop for prev-line = nil then cur-line
+          for cur-line in in-lines
+          for i = 0 then (1+ i)
+          with j = 0
+          with out-line = nil
+          do
+          ;; lines with cursordx annotation do not recieve other pocessing
+          (unless (or (parse-cursor-dx-line result i j cur-line)
+                      (parse-tab-stops-line result i cur-line out-lines)
+                      (parse-paren-trail-line result i j cur-line prev-line)
+            (setq cur-line (parse-cursor-from-line result i j cur-line))
+            (push cur-line out-lines)
+            (incf j))))
+    (push (list :text (combine-and-quote-strings (reverse out-lines) "\n"))
+          result)
+    ;; convert result into plist
+    (loop for (s . v) in result nconc(list s v))))
     
 
 (defun prepare-test (test)

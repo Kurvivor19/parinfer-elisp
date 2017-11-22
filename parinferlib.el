@@ -687,7 +687,7 @@
              (delta (and opener
                          (aref opener parinferlib--INDENT_DELTA_IDX))))
         (when delta
-          (parinferlib--change-indent result delta)))
+          (parinferlib--change-indent result delta))))
     (when (equal mode :paren)
       (parinferlib--correct-indent result))))
 
